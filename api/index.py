@@ -39,16 +39,17 @@ def is_admin_or_creator(user_id, q):
 # Handlers: start / collect_info / forceclose
 # -----------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # استخدم send_message بدل reply_text لتجنب BadRequest عندما تكون الرسالة غير قابلة للرد
     chat_id = update.effective_chat.id
-
     if chat_id in queues and not queues[chat_id].get("closed", True):
-        await update.message.reply_text("⚠️ فيه دور شغال بالفعل، اقفله الأول قبل تبدأ جديد.")
+        await context.bot.send_message(chat_id=chat_id, text="⚠️ فيه دور شغال بالفعل، اقفله الأول قبل تبدأ جديد.")
         return
 
     awaiting_input[chat_id] = {"step": "teacher"}
-    await update.message.reply_text("👩‍🏫 اكتب اسم المعلمة:")
+    await context.bot.send_message(chat_id=chat_id, text="👩‍🏫 اكتب اسم المعلمة:")
 
 async def collect_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # ✅ تأكد إن الرسالة نص مش زرار
     if not update.message or not update.message.text:
         return
 
@@ -63,7 +64,7 @@ async def collect_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if step == "teacher":
         awaiting_input[chat_id]["teacher"] = user_input
         awaiting_input[chat_id]["step"] = "class_name"
-        await update.message.reply_text("📘 اكتب اسم الحلقة:")
+        await context.bot.send_message(chat_id=chat_id, text="📘 اكتب اسم الحلقة:")
         return
 
     elif step == "class_name":
@@ -93,7 +94,7 @@ async def collect_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🎯 *القائمة الحالية:* (فاضية)"
         )
         # نرسل الرسالة للقناة/الشات التي بدأ فيها الدور
-        await update.message.reply_text(text, reply_markup=make_main_keyboard(chat_id), parse_mode="Markdown")
+        await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=make_main_keyboard(chat_id), parse_mode="Markdown")
 
 async def force_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -104,8 +105,9 @@ async def force_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id in awaiting_input:
         del awaiting_input[chat_id]
 
-    await update.message.reply_text(
-        f"🚨 تم قفل أو حذف أي دور مفتوح بواسطة *{user_name}* ✅",
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"🚨 تم قفل أو حذف أي دور مفتوح بواسطة *{user_name}* ✅",
         parse_mode="Markdown"
     )
 
@@ -127,14 +129,12 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # بعض الأفعال الخاصة التي لا تحتاج لقائمة queues أولاً
     if action == "select_channel":
-        # اختيار قناة من قائمة startrole (لو استعملت الخاص في النسخ الأخرى)
         try:
             target_chat_id = int(parts[1])
         except Exception:
             await query.answer("❌ خطأ في بيانات القناة.")
             return
         await query.answer("اخترت القناة. سيتم بدء إدخال البيانات.")
-        # نعيد استخدام نفس منطق prompt: نضع awaiting_input ومطالبة المستخدم في الخاص
         awaiting_input[target_chat_id] = {
             "step": "teacher",
             "creator_id": user.id,
@@ -147,7 +147,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    # بقية الأفعال تتطلب وجود q
     if len(parts) < 2:
         await query.answer("❌ خطأ في بيانات الزر.")
         return
@@ -196,7 +195,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(text, reply_markup=make_main_keyboard(chat_id), parse_mode="Markdown")
         except Exception as e:
             print("Warning: could not edit message after join:", e)
-            # بديل: نرسل رسالة جديدة في الشات (لو كان البوت مسموح له)
             try:
                 await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=make_main_keyboard(chat_id), parse_mode="Markdown")
             except Exception as e2:
@@ -301,13 +299,18 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await query.message.reply_text(final_text, parse_mode="Markdown")
         except Exception as e:
+            # لو reply فشل، نرسل كرسالة عادية للشات
             print("Warning: could not reply with final_text on close:", e)
+            try:
+                await context.bot.send_message(chat_id=chat_id, text=final_text, parse_mode="Markdown")
+            except Exception as e2:
+                print("Also failed to send final_text to chat:", e2)
 
         if chat_id in queues:
             del queues[chat_id]
         return
 
-    # ----------------- manage_admins -----------------
+    # ----------------- manage_admins / toggle_admin -----------------
     if action == "manage_admins":
         if user.id != q["creator"]:
             await query.answer("🚫 بس اللي بدأ الدور يقدر يدير المشرفين.")
@@ -333,7 +336,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             print("Warning: could not edit message for manage_admins:", e)
         return
 
-    # ----------------- toggle_admin -----------------
     if action == "toggle_admin":
         if user.id != q["creator"]:
             await query.answer("🚫 بس اللي بدأ الدور يقدر يعمل كده.")
@@ -365,7 +367,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             print("Warning: could not edit message after toggle_admin:", e)
         return
 
-    # unknown action
     await query.answer("❌ فعل غير معروف.")
     return
 
